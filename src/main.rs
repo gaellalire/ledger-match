@@ -142,7 +142,7 @@ extern "C" fn sample_main() {
             }
         };
 
-        show_status_and_home_if_needed(comm, &ins, &ctx, &status);
+        show_status_and_home_if_needed(comm, &ins, &mut ctx, &status);
     }
 }
 
@@ -168,7 +168,7 @@ fn handle_apdu<'a>(
 fn show_status_and_home_if_needed(
     comm: &mut Comm,
     ins: &Instruction,
-    ctx: &SignContext,
+    ctx: &mut SignContext,
     status: &AppSW,
 ) {
     let (show_status, status_type) = match (ins, status) {

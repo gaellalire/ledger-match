@@ -67,19 +67,6 @@ impl MatchResult {
         s
     }
 
-    /// Number of periods won by each side (meaningful for set-based sports).
-    pub fn periods_won(&self) -> (u32, u32) {
-        let mut won = (0u32, 0u32);
-        for (w, l) in &self.periods {
-            if w > l {
-                won.0 += 1;
-            } else if l > w {
-                won.1 += 1;
-            }
-        }
-        won
-    }
-
     /// Match date as "YYYY-MM-DD HH:MM UTC".
     pub fn date_string(&self) -> String {
         format_timestamp(self.timestamp)
