@@ -44,3 +44,14 @@ the device, from `target/flex/release`:
    ```bash
    python3 scripts/verify_signature.py <pubkey-response> <payload-hex> <sign-response>
    ```
+
+To build your own payload (also the reference encoder for future clients):
+
+```bash
+python3 scripts/encode_match.py < match.json   # JSON shape documented in the script
+```
+
+Then send it as SIGN_MATCH chunks: chunk 0 = BIP32 path, chunk 1 = payload
+(if it exceeds 255 bytes, split into multiple chunks with P2 = 0x80 until the
+last one). Verified on Flex with a full volleyball match (6 players per team,
+4 sets).
