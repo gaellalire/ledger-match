@@ -69,20 +69,22 @@ The sideloadable package is generated under `target/flex/release/`.
 ### Load on a physical device
 
 On macOS, Docker containers cannot access USB, so loading runs on the host
-with `ledgerctl` (the device must be connected, unlocked and on the
-dashboard):
+(the device must be connected, unlocked and on the dashboard):
 
 ```bash
-pip install "git+https://github.com/LedgerHQ/ledgerctl"   # provides ledgerctl
-python3 scripts/align_hex.py   # page-aligns the code region (idempotent)
-cd target/flex/release && ledgerctl install app.json
+pip install ledgerblue        # provides the .apdu script runner
+cd target/flex/release
+python3 -m ledgerblue.runScript --scp --targetId 0x33300004 --fileName ledger-match.apdu
 ```
 
-`target/flex/release/app.json` is a hand-written sideload manifest
-(cargo-ledger only emits the `.hex`/`.apdu` files). If the app's data section
-size changes, update its `dataSize` from the `cargo ledger build` output
-(`data_size`). `scripts/align_hex.py` pads the hex tail so the code region
-meets the loader's 512-byte page-alignment requirement.
+`cargo ledger build` generates `ledger-match.apdu`: a ready-to-replay install
+script containing the correct CREATE_APP/LOAD/COMMIT commands for this exact
+binary. Accept the "unverified app" warning on the device.
+
+Do **not** use `ledgerctl install` with a hand-written `app.json` manifest:
+its code-length computation (`hex span − dataSize`) does not match the
+cargo-ledger hex layout (which ends with an `.nvm_data` section), producing a
+broken install that freezes the device at launch.
 
 ## Regenerating the icons
 
