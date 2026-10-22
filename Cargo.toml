@@ -24,7 +24,9 @@ debug = ["ledger_device_sdk/debug"]
 [package.metadata.ledger]
 curve = ["secp256k1"]
 flags = "0"
-path = ["44'/535348'", "44'/535348'/0'"]
+# Declared BIP32 prefixes enforced by the OS; requests beyond one level deeper
+# than a declared prefix are rejected (0x6E03). Depth 4 allows m/44'/535348'/0'/0'/x.
+path = ["44'/535348'", "44'/535348'/0'", "44'/535348'/0'/0'"]
 name = "Match Signer"
 nanosplus = { icon = "icons/match_14x14.gif" }
 nanox = { icon = "icons/match_14x14.gif" }

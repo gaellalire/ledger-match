@@ -34,12 +34,18 @@ Response: ASCII app name (`ledger-match`).
 Data: BIP32 path, encoded as:
 
 ```
-[0x05] [0x8000002C] [0x80082B34] [0x80000000] [0x00000000] [0x00000000]
-  len     44'        535348'      0'           0            0
+[0x04] [0x8000002C] [0x80082B34] [0x80000000] [0x00000000]
+  len     44'        535348'      0'           0
 ```
 
 (1 length byte, then big-endian u32 components; hardened = `| 0x80000000`).
-Default path: `m/44'/535348'/0'/0/0`.
+Default path: `m/44'/535348'/0'/0`.
+
+The OS enforces the derivation prefixes declared in the app manifest: a
+requested path may extend a declared prefix by at most one level; anything
+deeper is rejected with status `0x6E03`. Declared prefixes:
+`44'/535348'`, `44'/535348'/0'`, `44'/535348'/0'/0'` (so up to
+`m/44'/535348'/0'/0'/x`).
 
 Response:
 

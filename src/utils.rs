@@ -30,9 +30,9 @@ impl TryFrom<&[u8]> for Bip32Path {
     ///
     /// # Example
     ///
-    /// For path m/44'/535348'/0'/0/0:
+    /// For path m/44'/535348'/0'/0:
     /// ```text
-    /// [0x05, 0x8000002C, 0x80082B34, 0x80000000, 0x00000000, 0x00000000]
+    /// [0x04, 0x8000002C, 0x80082B34, 0x80000000, 0x00000000]
     /// ```
     fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
         // Check data length
