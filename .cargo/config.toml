@@ -1,0 +1,24 @@
+# Ledger Flex is the primary target: plain `cargo build` / `cargo check` build
+# for it. Build for another device with:
+#   cargo ledger build <nanosplus|nanox|stax|flex>
+# The custom target specs are installed by `cargo ledger setup`.
+[build]
+target = "flex"
+
+[profile.release]
+opt-level = 'z'
+lto = true
+
+# Uncomment the line below to generate a map file
+# rustflags = ["-Clink-args=-Map=app.map"]
+
+[unstable]
+build-std = ["core", "alloc"]
+build-std-features = ["compiler-builtins-mem"]
+
+# By default, heap size is enforced to 8192 bytes.
+# Authorized values are [2048, 4096, 8192, 16384, 24576]
+# Uncomment the following lines to grow the heap (large matches with many
+# players may need it)
+#[env]
+#HEAP_SIZE = "16384"

@@ -1,0 +1,35 @@
+[package]
+name = "ledger-match"
+version = "0.1.0"
+authors = ["gaellalire"]
+edition = "2021"
+license = "Apache-2.0"
+description = "Ledger app that displays and signs sport match results (Flex, Stax, Nano X, Nano S+)"
+
+[dependencies]
+ledger_device_sdk = { version = "1", features = ["io_new"] }
+hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
+
+[build-dependencies]
+# Decode the source GIFs and write the processed grayscale PNG glyph without
+# pulling the full `image` crate (and its color-management stack). The luma
+# conversion in build.rs reproduces `image::into_luma8()`.
+gif = "0.14"
+png = "0.18"
+
+[features]
+default = ["ledger_device_sdk/nano_nbgl"]
+debug = ["ledger_device_sdk/debug"]
+
+[package.metadata.ledger]
+curve = ["secp256k1"]
+flags = "0"
+path = ["44'/535348'", "44'/535348'/0'"]
+name = "Match Signer"
+nanosplus = { icon = "icons/match_14x14.gif" }
+nanox = { icon = "icons/match_14x14.gif" }
+stax = { icon = "icons/match_32x32.gif" }
+flex = { icon = "icons/match_40x40.gif" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("stax", "flex", "nanos", "nanox", "nanosplus"))'] }
