@@ -54,4 +54,5 @@ python3 scripts/encode_match.py < match.json   # JSON shape documented in the sc
 Then send it as SIGN_MATCH chunks: chunk 0 = BIP32 path, chunk 1 = payload
 (if it exceeds 255 bytes, split into multiple chunks with P2 = 0x80 until the
 last one). Verified on Flex with a full volleyball match (6 players per team,
-4 sets).
+4 sets) and a rugby match (15 players per team, 2 periods, 302 bytes split
+into 2 chunks).
