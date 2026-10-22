@@ -66,6 +66,24 @@ cargo ledger build flex     # or: nanosplus | nanox | stax
 
 The sideloadable package is generated under `target/flex/release/`.
 
+### Load on a physical device
+
+On macOS, Docker containers cannot access USB, so loading runs on the host
+with `ledgerctl` (the device must be connected, unlocked and on the
+dashboard):
+
+```bash
+pip install "git+https://github.com/LedgerHQ/ledgerctl"   # provides ledgerctl
+python3 scripts/align_hex.py   # page-aligns the code region (idempotent)
+cd target/flex/release && ledgerctl install app.json
+```
+
+`target/flex/release/app.json` is a hand-written sideload manifest
+(cargo-ledger only emits the `.hex`/`.apdu` files). If the app's data section
+size changes, update its `dataSize` from the `cargo ledger build` output
+(`data_size`). `scripts/align_hex.py` pads the hex tail so the code region
+meets the loader's 512-byte page-alignment requirement.
+
 ## Regenerating the icons
 
 The committed icons are placeholder art (checkmark in a ring):
