@@ -1,8 +1,14 @@
-//! Sport-agnostic match result model and its canonical TLV encoding.
+//! Activity-agnostic competition result model and its canonical TLV encoding (v2).
 //!
-//! The binary format is a simple TLV: 1-byte tag, 2-byte big-endian length,
-//! then the value. Nested structures (teams, score) are themselves TLV
-//! sequences carried as the value of their parent field. Unknown tags are
+//! Two layouts share one format:
+//! - **Versus**: two sides (winner/loser), each side being an optional name
+//!   plus an optional player list; a shared score (per period) is optional.
+//! - **Free-for-all**: a flat list of participants, each with an optional
+//!   individual score (tarot, bridge, races...).
+//!
+//! The binary format is TLV: 1-byte tag, 2-byte big-endian length, value.
+//! Nested blocks (score, referees, player lists, participants) are themselves
+//! TLV sequences carried as the value of their parent field. Unknown tags are
 //! ignored so newer clients remain compatible with older firmware.
 //!
 //! See docs/APDU.md for the authoritative specification.
@@ -14,48 +20,76 @@ use core::str;
 use crate::utils::format_timestamp;
 use crate::AppSW;
 
-/// Maximum accepted size in bytes of a complete serialized match result.
+/// Maximum accepted size in bytes of a complete serialized result.
 pub const MAX_MATCH_LEN: usize = 3072;
-/// Maximum byte length of a team or player name (UTF-8).
+/// Maximum byte length of a name or free-text field (UTF-8).
 pub const MAX_NAME_LEN: usize = 32;
-/// Maximum number of players per team (starters + substitutes).
-pub const MAX_PLAYERS: usize = 24;
+/// Maximum items in any list (players per side, participants, referees).
+pub const MAX_LIST_ITEMS: usize = 24;
 /// Maximum number of score periods (sets, quarters, innings, ...).
 pub const MAX_PERIODS: usize = 16;
 
 // Top-level tags.
 const TAG_VERSION: u8 = 0x01;
-const TAG_TIMESTAMP: u8 = 0x02;
-const TAG_SPORT: u8 = 0x03;
-const TAG_WINNER: u8 = 0x04;
-const TAG_LOSER: u8 = 0x05;
-const TAG_SCORE: u8 = 0x06;
+const TAG_ACTIVITY: u8 = 0x02;
+const TAG_TIMESTAMP: u8 = 0x03;
+const TAG_LOCATION: u8 = 0x04;
+const TAG_COMPETITION: u8 = 0x05;
+const TAG_WINNER: u8 = 0x06;
+const TAG_LOSER: u8 = 0x07;
+const TAG_SCORE: u8 = 0x08;
+const TAG_REFEREES: u8 = 0x09;
+const TAG_WINNER_PLAYERS: u8 = 0x0A;
+const TAG_LOSER_PLAYERS: u8 = 0x0B;
+const TAG_PARTICIPANTS: u8 = 0x0C;
 
-const FORMAT_VERSION: u8 = 0x01;
+const FORMAT_VERSION: u8 = 0x02;
 
-/// A team that took part in the match.
-#[derive(Default)]
-pub struct Team {
+/// A free-for-all participant with an optional individual score.
+pub struct Participant {
     pub name: String,
-    pub players: Vec<String>,
+    pub score: Option<i32>,
 }
 
-/// A parsed match result.
+/// Which layout a result uses.
+#[derive(PartialEq)]
+pub enum Layout {
+    Versus,
+    FreeForAll,
+}
+
+/// A parsed result.
+#[derive(Default)]
 pub struct MatchResult {
-    /// Match date/time as a Unix timestamp (displayed in UTC).
+    /// Optional activity name, e.g. "volleyball", "tarot".
+    pub activity: Option<String>,
+    /// Date/time as a Unix timestamp (displayed in UTC).
     pub timestamp: u64,
-    /// Optional sport identifier, e.g. "volleyball", "soccer", "tennis".
-    pub sport: Option<String>,
-    pub winner: Team,
-    pub loser: Team,
-    /// Score as (winner points, loser points) per period. A single period is
-    /// used for sports with one final score (soccer, basketball...); multiple
-    /// periods model sets/quarters/innings (volleyball, tennis, baseball...).
-    pub periods: Vec<(u32, u32)>,
+    pub location: Option<String>,
+    /// Optional event context, e.g. "Roland Garros 2026 — QF".
+    pub competition: Option<String>,
+    /// Side names; both optional (tennis doubles) or both absent (draw).
+    pub winner: Option<String>,
+    pub loser: Option<String>,
+    /// Score as (winner points, loser points) per period; empty = no score.
+    /// Points are signed (card games, golf can go negative).
+    pub periods: Vec<(i32, i32)>,
+    pub referees: Vec<String>,
+    pub winner_players: Vec<String>,
+    pub loser_players: Vec<String>,
+    pub participants: Vec<Participant>,
 }
 
 impl MatchResult {
-    /// "25-10 25-14 15-25 25-22" (one "w-l" group per period).
+    pub fn layout(&self) -> Layout {
+        if self.participants.is_empty() {
+            Layout::Versus
+        } else {
+            Layout::FreeForAll
+        }
+    }
+
+    /// "25-10 25-14" (one "w-l" group per period).
     pub fn score_string(&self) -> String {
         let mut s = String::new();
         for (i, (w, l)) in self.periods.iter().enumerate() {
@@ -67,7 +101,7 @@ impl MatchResult {
         s
     }
 
-    /// Match date as "YYYY-MM-DD HH:MM UTC".
+    /// Result date as "YYYY-MM-DD HH:MM UTC".
     pub fn date_string(&self) -> String {
         format_timestamp(self.timestamp)
     }
@@ -112,62 +146,76 @@ fn parse_name(data: &[u8]) -> Result<String, AppSW> {
     Ok(String::from(s))
 }
 
-/// Team value: repeated fields, tag 0x01 = team name (once), 0x02 = one player.
-fn parse_team(data: &[u8]) -> Result<Team, AppSW> {
-    let mut team = Team::default();
-    let mut have_name = false;
+/// Name list block: repeated fields, tag 0x01 = one name.
+fn parse_name_list(data: &[u8]) -> Result<Vec<String>, AppSW> {
+    let mut names = Vec::new();
     let mut reader = TlvReader::new(data);
     while let Some((tag, value)) = reader.next()? {
-        match tag {
-            0x01 => {
-                team.name = parse_name(value)?;
-                have_name = true;
+        if tag == 0x01 {
+            if names.len() >= MAX_LIST_ITEMS {
+                return Err(AppSW::ParsingFail);
             }
-            0x02 => {
-                if team.players.len() >= MAX_PLAYERS {
-                    return Err(AppSW::ParsingFail);
-                }
-                team.players.push(parse_name(value)?);
-            }
-            _ => {} // forward compatibility
+            names.push(parse_name(value)?);
         }
     }
-    if !have_name {
-        return Err(AppSW::ParsingFail);
-    }
-    Ok(team)
+    Ok(names)
 }
 
-/// Score value: repeated fields, tag 0x01 = one period (8 bytes: two BE u32).
-fn parse_score(data: &[u8]) -> Result<Vec<(u32, u32)>, AppSW> {
-    let mut periods: Vec<(u32, u32)> = Vec::new();
+/// Score block: repeated fields, tag 0x01 = one period (8 bytes: two BE i32).
+fn parse_score(data: &[u8]) -> Result<Vec<(i32, i32)>, AppSW> {
+    let mut periods: Vec<(i32, i32)> = Vec::new();
     let mut reader = TlvReader::new(data);
     while let Some((tag, value)) = reader.next()? {
-        match tag {
-            0x01 => {
-                if value.len() != 8 || periods.len() >= MAX_PERIODS {
-                    return Err(AppSW::ParsingFail);
-                }
-                let w = u32::from_be_bytes(value[0..4].try_into().unwrap());
-                let l = u32::from_be_bytes(value[4..8].try_into().unwrap());
-                periods.push((w, l));
+        if tag == 0x01 {
+            if value.len() != 8 || periods.len() >= MAX_PERIODS {
+                return Err(AppSW::ParsingFail);
             }
-            _ => {}
+            let w = i32::from_be_bytes(value[0..4].try_into().unwrap());
+            let l = i32::from_be_bytes(value[4..8].try_into().unwrap());
+            periods.push((w, l));
         }
-    }
-    if periods.is_empty() {
-        return Err(AppSW::ParsingFail);
     }
     Ok(periods)
 }
 
-/// Parse a complete serialized match result.
+/// Participants block: repeated fields, tag 0x01 = one participant, itself a
+/// TLV sequence (0x01 name required, 0x02 score optional as 4-byte BE i32).
+fn parse_participants(data: &[u8]) -> Result<Vec<Participant>, AppSW> {
+    let mut participants: Vec<Participant> = Vec::new();
+    let mut reader = TlvReader::new(data);
+    while let Some((tag, value)) = reader.next()? {
+        if tag == 0x01 {
+            if participants.len() >= MAX_LIST_ITEMS {
+                return Err(AppSW::ParsingFail);
+            }
+            let mut name: Option<String> = None;
+            let mut score: Option<i32> = None;
+            let mut inner = TlvReader::new(value);
+            while let Some((itag, ivalue)) = inner.next()? {
+                match itag {
+                    0x01 => name = Some(parse_name(ivalue)?),
+                    0x02 => {
+                        if ivalue.len() != 4 {
+                            return Err(AppSW::ParsingFail);
+                        }
+                        score = Some(i32::from_be_bytes(ivalue.try_into().unwrap()));
+                    }
+                    _ => {} // forward compatibility
+                }
+            }
+            participants.push(Participant {
+                name: name.ok_or(AppSW::ParsingFail)?,
+                score,
+            });
+        }
+    }
+    Ok(participants)
+}
+
+/// Parse a complete serialized result.
 pub fn parse(data: &[u8]) -> Result<MatchResult, AppSW> {
-    let mut timestamp: Option<u64> = None;
-    let mut sport: Option<String> = None;
-    let mut winner: Option<Team> = None;
-    let mut loser: Option<Team> = None;
-    let mut periods: Option<Vec<(u32, u32)>> = None;
+    let mut result = MatchResult::default();
+    let mut have_timestamp = false;
 
     let mut reader = TlvReader::new(data);
     while let Some((tag, value)) = reader.next()? {
@@ -181,21 +229,50 @@ pub fn parse(data: &[u8]) -> Result<MatchResult, AppSW> {
                 if value.len() != 8 {
                     return Err(AppSW::ParsingFail);
                 }
-                timestamp = Some(u64::from_be_bytes(value.try_into().unwrap()));
+                result.timestamp = u64::from_be_bytes(value.try_into().unwrap());
+                have_timestamp = true;
             }
-            TAG_SPORT => sport = Some(parse_name(value)?),
-            TAG_WINNER => winner = Some(parse_team(value)?),
-            TAG_LOSER => loser = Some(parse_team(value)?),
-            TAG_SCORE => periods = Some(parse_score(value)?),
+            TAG_ACTIVITY => result.activity = Some(parse_name(value)?),
+            TAG_LOCATION => result.location = Some(parse_name(value)?),
+            TAG_COMPETITION => result.competition = Some(parse_name(value)?),
+            TAG_WINNER => result.winner = Some(parse_name(value)?),
+            TAG_LOSER => result.loser = Some(parse_name(value)?),
+            TAG_SCORE => result.periods = parse_score(value)?,
+            TAG_REFEREES => result.referees = parse_name_list(value)?,
+            TAG_WINNER_PLAYERS => result.winner_players = parse_name_list(value)?,
+            TAG_LOSER_PLAYERS => result.loser_players = parse_name_list(value)?,
+            TAG_PARTICIPANTS => result.participants = parse_participants(value)?,
             _ => {} // forward compatibility
         }
     }
 
-    Ok(MatchResult {
-        timestamp: timestamp.ok_or(AppSW::ParsingFail)?,
-        sport,
-        winner: winner.ok_or(AppSW::ParsingFail)?,
-        loser: loser.ok_or(AppSW::ParsingFail)?,
-        periods: periods.ok_or(AppSW::ParsingFail)?,
-    })
+    if !have_timestamp {
+        return Err(AppSW::ParsingFail);
+    }
+
+    match result.layout() {
+        Layout::FreeForAll => {
+            // Versus-only fields must not be mixed in.
+            if result.winner.is_some()
+                || result.loser.is_some()
+                || !result.periods.is_empty()
+                || !result.winner_players.is_empty()
+                || !result.loser_players.is_empty()
+            {
+                return Err(AppSW::ParsingFail);
+            }
+        }
+        Layout::Versus => {
+            // At least one side designation (name or players) must exist.
+            if result.winner.is_none()
+                && result.loser.is_none()
+                && result.winner_players.is_empty()
+                && result.loser_players.is_empty()
+            {
+                return Err(AppSW::ParsingFail);
+            }
+        }
+    }
+
+    Ok(result)
 }

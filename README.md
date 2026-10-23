@@ -6,15 +6,18 @@ that **signs sport match results** after an on-device review (clear signing).
 
 Primary target: **Ledger Flex**. Also builds for Stax, Nano X and Nano S+.
 
-The signed payload is deliberately sport-agnostic:
+The signed payload is deliberately activity-agnostic. Two layouts share one
+TLV format (version 2):
 
-```
-(date, winnerTeam { name, players }, loserTeam { name, players }, score)
-```
+- **Versus**: `(activity?, date, location?, competition?, winner?, loser?,
+  score?, referees?, winningPlayers?, losingPlayers?)` — names, score and all
+  lists optional (tennis doubles have no team name, chess needs no score).
+- **Free-for-all**: `(activity?, date, location?, participants[{name, score?}],
+  referees?)` — tarot, bridge, races.
 
-The score is a list of periods (sets / quarters / innings / ...), so a single
-format covers soccer (one period), volleyball and tennis (sets), basketball
-(quarters), etc. See [docs/APDU.md](docs/APDU.md) for the exact binary format.
+The versus score is a list of periods (sets / quarters / innings / ...) with
+signed points, so a single format covers soccer, volleyball, basketball, golf,
+etc. See [docs/APDU.md](docs/APDU.md) for the exact binary format.
 
 ## Flow
 

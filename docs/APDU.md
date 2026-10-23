@@ -73,72 +73,117 @@ review, and on approval returns:
 The signed message is `keccak256(raw_tlv_payload)` exactly as received —
 clients must serialize in the canonical form below for signatures to verify.
 
-## Match result TLV format
+**Post-sign modal status window:** after the response, the device shows a
+modal "signed/rejected" status page for ~3 seconds. APDUs sent during that
+window may be answered with `0x6901` (command not accepted) — clients should
+wait for the home screen (or ~3 s) before issuing the next command.
+
+## Result TLV format (v2)
 
 Every field is `tag (1 byte) | length (u16 BE) | value`. Unknown tags must be
-skipped by parsers (forward compatibility). Nested values (team, score) are
-themselves TLV sequences.
+skipped by parsers (forward compatibility). Nested blocks (score, referees,
+player lists, participants) are themselves TLV sequences.
 
 Canonical form (required for signing): fields in ascending tag order, each tag
 at most once, UTF-8 strings, no extra padding.
 
-### Top level
+Two layouts share the format: **versus** (two sides) and **free-for-all**
+(flat participant list). A payload is free-for-all if and only if it contains
+a participants block; versus-only fields must then be absent.
 
-| Tag  | Name      | Value                                             | Required |
-|------|-----------|---------------------------------------------------|----------|
-| 0x01 | version   | 1 byte, `0x01`                                    | yes      |
-| 0x02 | timestamp | u64 BE, Unix seconds                              | yes      |
-| 0x03 | sport     | UTF-8, e.g. `"volleyball"`                        | no       |
-| 0x04 | winner    | team TLV                                          | yes      |
-| 0x05 | loser     | team TLV                                          | yes      |
-| 0x06 | score     | score TLV                                         | yes      |
+### Common fields
 
-### Team (tags inside 0x04 / 0x05 values)
+| Tag  | Name        | Value                               | Required |
+|------|-------------|-------------------------------------|----------|
+| 0x01 | version     | 1 byte, `0x02`                      | yes      |
+| 0x02 | activity    | UTF-8, e.g. `"volleyball"`, `"tarot"` | no     |
+| 0x03 | timestamp   | u64 BE, Unix seconds                | yes      |
+| 0x04 | location    | UTF-8                               | no       |
+| 0x05 | competition | UTF-8, e.g. `"Roland Garros 2026 QF"` | no    |
 
-| Tag  | Name   | Value                       | Required            |
-|------|--------|-----------------------------|---------------------|
-| 0x01 | name   | UTF-8, ≤ 32 bytes           | yes                 |
-| 0x02 | player | UTF-8, ≤ 32 bytes, repeated | no (≤ 24 per team)  |
+### Versus layout
 
-### Score (tags inside 0x06 value)
+| Tag  | Name            | Value             | Required |
+|------|-----------------|-------------------|----------|
+| 0x06 | winner          | UTF-8 side name   | no*      |
+| 0x07 | loser           | UTF-8 side name   | no*      |
+| 0x08 | score           | score block       | no       |
+| 0x09 | referees        | name-list block   | no       |
+| 0x0A | winning players | name-list block   | no       |
+| 0x0B | losing players  | name-list block   | no       |
 
-| Tag  | Name   | Value                                        | Required |
-|------|--------|----------------------------------------------|----------|
-| 0x01 | period | 8 bytes: winner points u32 BE + loser u32 BE | yes, ≥ 1 (≤ 16) |
+*At least one side designation (a name or a player list) is required.
 
-One period for single-score sports (soccer: `2-1`), several for
-set/quarter-based sports (volleyball: `25-10 25-14 15-25 25-22`).
+Score block: repeated `0x01` fields, each 8 bytes = winner points (i32 BE) +
+loser points (i32 BE). One period for single-score sports, several for
+set/quarter-based sports. Points are **signed** (golf, card games). Decimal
+scores are scaled by the client (e.g. ×100) — the format carries integers.
+
+Name-list block: repeated `0x01` fields, each a UTF-8 name.
+
+### Free-for-all layout
+
+| Tag  | Name         | Value              | Required |
+|------|--------------|--------------------|----------|
+| 0x09 | referees     | name-list block    | no       |
+| 0x0C | participants | participants block | yes (≥1) |
+
+Participants block: repeated `0x01` fields, each a nested TLV sequence:
+
+| Tag  | Name  | Value           | Required |
+|------|-------|-----------------|----------|
+| 0x01 | name  | UTF-8           | yes      |
+| 0x02 | score | i32 BE (signed) | no       |
+
+The device displays each participant with their score; ranking/winner
+computation is left to the client (highest or lowest wins depends on the
+activity).
 
 ### Limits
 
-| Limit                    | Value  |
-|--------------------------|--------|
-| Total payload            | 3072 B |
-| Team / player name       | 32 B   |
-| Players per team         | 24     |
-| Score periods            | 16     |
-| Chunks (incl. path)      | 16     |
+| Limit                                                    | Value  |
+|----------------------------------------------------------|--------|
+| Total payload                                            | 3072 B |
+| Name / text field                                        | 32 B   |
+| Items per list (players, participants, referees)         | 24     |
+| Score periods                                            | 16     |
+| Chunks (incl. path)                                      | 16     |
 
-Players beyond what fits the review screen are truncated on display but are
-still fully covered by the signature.
+Long player/referee lists are truncated on the review display but are still
+fully covered by the signature.
 
-### Example
+### Example (versus)
 
-Minimal soccer match, winner "ABC", loser "XYZ", score 2-1,
-timestamp 1780000000:
-
-```
-01 0001 01                                        version = 1
-02 0008 000000006A18A900                          timestamp
-04 0006 010003414243                              winner: name "ABC"
-05 0006 01000358595A                              loser:  name "XYZ"
-06 000B 0100080000000200000001                    score: one period 2-1
-```
-
-Full payload (47 bytes):
+Soccer: winner "ABC", loser "XYZ", score 2-1, timestamp 1780000000:
 
 ```
-01000101020008 000000006A18A900 04000601000341424305000601000358595A06000B0100080000000200000001
+01 0001 02                                      version = 2
+02 0006 736F63636572                            activity "soccer"
+03 0008 000000006A18A900                        timestamp
+06 0003 414243                                  winner "ABC"
+07 0003 58595A                                  loser "XYZ"
+08 000B 0100080000000200000001                  score: one period 2-1
+```
+
+Full payload (54 bytes):
+
+```
+01000102020006736f63636572030008000000006a18a90006000341424307000358595a08000b0100080000000200000001
+```
+
+### Example (free-for-all)
+
+Tarot, 4 participants, timestamp 1780000000 (95 bytes):
+
+```
+01 0001 02                                      version = 2
+02 0005 7461726F74                              activity "tarot"
+03 0008 000000006A18A900                        timestamp
+0C 0045                                         participants block (69 bytes):
+  01 000F 010005416C6963650200040000026C        Alice, 620
+  01 000D 010003426F62020004FFFFFF88            Bob, -120
+  01 000F 0100054361726F6C0200040000002D        Carol, 45
+  01 000E 01000444617665020004FFFFFDDF          Dave, -545
 ```
 
 ## Status words

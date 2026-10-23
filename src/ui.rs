@@ -1,10 +1,10 @@
-//! NBGL user interface: home screen, match result review, address review.
+//! NBGL user interface: home screen, result review, address review.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::match_result::MatchResult;
+use crate::match_result::{Layout, MatchResult};
 use crate::AppSW;
 use ledger_device_sdk::include_gif;
 use ledger_device_sdk::io::Comm;
@@ -29,9 +29,9 @@ const HOME_GLYPH: NbglGlyph =
 const HOME_GLYPH: NbglGlyph =
     NbglGlyph::from_include(include_gif!("glyphs/home_nano_nbgl.png", NBGL));
 
-/// Max characters shown for a players list in the review; longer lists are
-/// truncated with an ellipsis (all players are still covered by the signature).
-const MAX_PLAYERS_DISPLAY: usize = 96;
+/// Max characters shown for a names list in the review; longer lists are
+/// truncated with an ellipsis (all names are still covered by the signature).
+const MAX_LIST_DISPLAY: usize = 96;
 
 /// Application home screen.
 pub fn ui_menu_main(_: &mut Comm) -> NbglHomeAndSettings {
@@ -59,8 +59,8 @@ pub fn ui_display_address(comm: &mut Comm, addr: &[u8]) -> Result<bool, AppSW> {
         .show(comm, &addr_hex))
 }
 
-fn join_truncated(players: &[String], max: usize) -> String {
-    let mut s = players.join(", ");
+fn join_truncated(names: &[String], max: usize) -> String {
+    let mut s = names.join(", ");
     if s.len() > max {
         let mut end = max;
         while !s.is_char_boundary(end) {
@@ -72,53 +72,74 @@ fn join_truncated(players: &[String], max: usize) -> String {
     s
 }
 
-/// Display a match result for clear signing; returns true if the user
-/// approved it.
+fn push_opt<'a>(fields: &mut Vec<Field<'a>>, name: &'a str, value: &'a str) {
+    if !value.is_empty() {
+        fields.push(Field { name, value });
+    }
+}
+
+/// Display a result for clear signing; returns true if the user approved it.
 pub fn ui_display_match(comm: &mut Comm, m: &MatchResult) -> Result<bool, AppSW> {
     let date = m.date_string();
+    let activity = m.activity.clone().unwrap_or_default();
+    let location = m.location.clone().unwrap_or_default();
+    let competition = m.competition.clone().unwrap_or_default();
+    let winner = m.winner.clone().unwrap_or_default();
+    let loser = m.loser.clone().unwrap_or_default();
     let score = m.score_string();
-    let winner_players = join_truncated(&m.winner.players, MAX_PLAYERS_DISPLAY);
-    let loser_players = join_truncated(&m.loser.players, MAX_PLAYERS_DISPLAY);
-    let sport = m.sport.clone().unwrap_or_default();
+    let referees = join_truncated(&m.referees, MAX_LIST_DISPLAY);
+    let winner_players = join_truncated(&m.winner_players, MAX_LIST_DISPLAY);
+    let loser_players = join_truncated(&m.loser_players, MAX_LIST_DISPLAY);
 
-    let mut fields: Vec<Field> = Vec::with_capacity(7);
-    if m.sport.is_some() {
-        fields.push(Field {
-            name: "Sport",
-            value: sport.as_str(),
-        });
+    let is_ffa = m.layout() == Layout::FreeForAll;
+
+    // Individual scores for free-for-all (kept alive until after the review).
+    let mut participant_scores: Vec<String> = Vec::new();
+    if is_ffa {
+        for p in &m.participants {
+            participant_scores.push(match p.score {
+                Some(s) => format!("{}", s),
+                None => String::from("–"),
+            });
+        }
     }
+
+    let mut fields: Vec<Field> = Vec::new();
+    push_opt(&mut fields, "Activity", activity.as_str());
     fields.push(Field {
         name: "Date",
         value: date.as_str(),
     });
-    fields.push(Field {
-        name: "Winner",
-        value: m.winner.name.as_str(),
-    });
-    if !winner_players.is_empty() {
-        fields.push(Field {
-            name: "Winner players",
-            value: winner_players.as_str(),
-        });
+    push_opt(&mut fields, "Location", location.as_str());
+    push_opt(&mut fields, "Competition", competition.as_str());
+
+    if is_ffa {
+        for (i, p) in m.participants.iter().enumerate() {
+            fields.push(Field {
+                name: p.name.as_str(),
+                value: participant_scores[i].as_str(),
+            });
+        }
+        push_opt(&mut fields, "Referees", referees.as_str());
+    } else {
+        push_opt(&mut fields, "Winner", winner.as_str());
+        push_opt(&mut fields, "Loser", loser.as_str());
+        push_opt(&mut fields, "Score", score.as_str());
+        push_opt(&mut fields, "Referees", referees.as_str());
+        push_opt(&mut fields, "Winning players", winner_players.as_str());
+        push_opt(&mut fields, "Losing players", loser_players.as_str());
     }
-    fields.push(Field {
-        name: "Loser",
-        value: m.loser.name.as_str(),
-    });
-    if !loser_players.is_empty() {
-        fields.push(Field {
-            name: "Loser players",
-            value: loser_players.as_str(),
-        });
-    }
-    fields.push(Field {
-        name: "Score",
-        value: score.as_str(),
-    });
 
     let review: NbglReview = NbglReview::new()
-        .titles("Review match result", "", "Sign match result")
+        .titles(
+            if is_ffa {
+                "Review result"
+            } else {
+                "Review match result"
+            },
+            "",
+            if is_ffa { "Sign result" } else { "Sign match result" },
+        )
         .glyph(&MATCH_GLYPH);
 
     Ok(review.show(comm, &fields))
