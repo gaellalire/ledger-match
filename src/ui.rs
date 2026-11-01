@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::match_result::{Layout, MatchResult, Outcome};
+use crate::utils::ascii_fold;
 use crate::AppSW;
 use ledger_device_sdk::include_gif;
 use ledger_device_sdk::io::Comm;
@@ -61,14 +62,10 @@ pub fn ui_display_address(comm: &mut Comm, addr: &[u8]) -> Result<bool, AppSW> {
 }
 
 fn join_truncated(names: &[String], max: usize) -> String {
-    let mut s = names.join(", ");
+    let mut s = ascii_fold(&names.join(", "));
     if s.len() > max {
-        let mut end = max;
-        while !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        s.truncate(end);
-        s.push('…');
+        s.truncate(max);
+        s.push_str("...");
     }
     s
 }
@@ -82,11 +79,11 @@ fn push_opt<'a>(fields: &mut Vec<Field<'a>>, name: &'a str, value: &'a str) {
 /// Display a result for clear signing; returns true if the user approved it.
 pub fn ui_display_match(comm: &mut Comm, m: &MatchResult) -> Result<bool, AppSW> {
     let date = m.date_string();
-    let activity = m.activity.clone().unwrap_or_default();
-    let location = m.location.clone().unwrap_or_default();
-    let competition = m.competition.clone().unwrap_or_default();
-    let side1 = m.side1.clone().unwrap_or_default();
-    let side2 = m.side2.clone().unwrap_or_default();
+    let activity = ascii_fold(m.activity.as_deref().unwrap_or_default());
+    let location = ascii_fold(m.location.as_deref().unwrap_or_default());
+    let competition = ascii_fold(m.competition.as_deref().unwrap_or_default());
+    let side1 = ascii_fold(m.side1.as_deref().unwrap_or_default());
+    let side2 = ascii_fold(m.side2.as_deref().unwrap_or_default());
     let score = m.score_string();
     let referees = join_truncated(&m.referees, MAX_LIST_DISPLAY);
     let side1_players = join_truncated(&m.side1_players, MAX_LIST_DISPLAY);
@@ -121,11 +118,13 @@ pub fn ui_display_match(comm: &mut Comm, m: &MatchResult) -> Result<bool, AppSW>
 
     // Individual scores for free-for-all (kept alive until after the review).
     let mut participant_scores: Vec<String> = Vec::new();
+    let mut participant_names: Vec<String> = Vec::new();
     if is_ffa {
         for p in &m.participants {
+            participant_names.push(ascii_fold(&p.name));
             participant_scores.push(match p.score {
                 Some(s) => format!("{}", s),
-                None => String::from("–"),
+                None => String::from("-"),
             });
         }
     }
@@ -142,7 +141,7 @@ pub fn ui_display_match(comm: &mut Comm, m: &MatchResult) -> Result<bool, AppSW>
     if is_ffa {
         for (i, p) in m.participants.iter().enumerate() {
             fields.push(Field {
-                name: p.name.as_str(),
+                name: participant_names[i].as_str(),
                 value: participant_scores[i].as_str(),
             });
         }

@@ -104,3 +104,41 @@ pub fn format_timestamp(ts: u64) -> alloc::string::String {
 
     alloc::format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", year, m, d, hh, mm)
 }
+
+/// Fold text to plain ASCII for display: the device font has no accented
+/// glyphs and renders UTF-8 bytes one by one. The signature still covers the
+/// original text.
+pub fn ascii_fold(s: &str) -> alloc::string::String {
+    let mut out = alloc::string::String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' => out.push('A'),
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => out.push('a'),
+            'Æ' => out.push_str("AE"),
+            'æ' => out.push_str("ae"),
+            'Ç' => out.push('C'),
+            'ç' => out.push('c'),
+            'È' | 'É' | 'Ê' | 'Ë' => out.push('E'),
+            'è' | 'é' | 'ê' | 'ë' => out.push('e'),
+            'Ì' | 'Í' | 'Î' | 'Ï' => out.push('I'),
+            'ì' | 'í' | 'î' | 'ï' => out.push('i'),
+            'Ñ' => out.push('N'),
+            'ñ' => out.push('n'),
+            'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' => out.push('O'),
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' => out.push('o'),
+            'Œ' => out.push_str("OE"),
+            'œ' => out.push_str("oe"),
+            'Ù' | 'Ú' | 'Û' | 'Ü' => out.push('U'),
+            'ù' | 'ú' | 'û' | 'ü' => out.push('u'),
+            'Ý' | 'Ÿ' => out.push('Y'),
+            'ý' | 'ÿ' => out.push('y'),
+            'ß' => out.push_str("ss"),
+            '’' | '‘' => out.push('\''),
+            '“' | '”' => out.push('"'),
+            '–' | '—' => out.push('-'),
+            c if c.is_ascii() => out.push(c),
+            _ => out.push('?'),
+        }
+    }
+    out
+}
