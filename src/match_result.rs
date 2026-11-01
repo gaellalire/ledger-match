@@ -1,8 +1,10 @@
-//! Activity-agnostic competition result model and its canonical TLV encoding (v2).
+//! Activity-agnostic game result model and its canonical TLV encoding (v1).
 //!
 //! Two layouts share one format:
-//! - **Versus**: two sides (winner/loser), each side being an optional name
+//! - **Versus**: two sides (side 1/side 2), each side being an optional name
 //!   plus an optional player list; a shared score (per period) is optional.
+//!   The outcome (win/draw) is deduced from the score; forfeits are carried
+//!   by an explicit field.
 //! - **Free-for-all**: a flat list of participants, each with an optional
 //!   individual score (tarot, bridge, races...).
 //!
@@ -35,15 +37,16 @@ const TAG_ACTIVITY: u8 = 0x02;
 const TAG_TIMESTAMP: u8 = 0x03;
 const TAG_LOCATION: u8 = 0x04;
 const TAG_COMPETITION: u8 = 0x05;
-const TAG_WINNER: u8 = 0x06;
-const TAG_LOSER: u8 = 0x07;
+const TAG_SIDE1: u8 = 0x06;
+const TAG_SIDE2: u8 = 0x07;
 const TAG_SCORE: u8 = 0x08;
 const TAG_REFEREES: u8 = 0x09;
-const TAG_WINNER_PLAYERS: u8 = 0x0A;
-const TAG_LOSER_PLAYERS: u8 = 0x0B;
+const TAG_SIDE1_PLAYERS: u8 = 0x0A;
+const TAG_SIDE2_PLAYERS: u8 = 0x0B;
 const TAG_PARTICIPANTS: u8 = 0x0C;
+const TAG_FORFEIT: u8 = 0x0D;
 
-const FORMAT_VERSION: u8 = 0x02;
+const FORMAT_VERSION: u8 = 0x01;
 
 /// A free-for-all participant with an optional individual score.
 pub struct Participant {
@@ -58,6 +61,27 @@ pub enum Layout {
     FreeForAll,
 }
 
+/// Which side(s) forfeited (explicit field, tag 0x0D).
+#[derive(Clone, Copy, PartialEq)]
+pub enum Forfeit {
+    Side1 = 0x01,
+    Side2 = 0x02,
+    Both = 0x03,
+}
+
+/// Outcome of a versus game, deduced from the forfeit field and the score.
+#[derive(PartialEq)]
+pub enum Outcome {
+    Side1Wins,
+    Side2Wins,
+    Draw,
+    Side1WinsByForfeit,
+    Side2WinsByForfeit,
+    BothForfeited,
+    /// No forfeit and no score: nothing to deduce.
+    Unknown,
+}
+
 /// A parsed result.
 #[derive(Default)]
 pub struct MatchResult {
@@ -68,16 +92,18 @@ pub struct MatchResult {
     pub location: Option<String>,
     /// Optional event context, e.g. "Roland Garros 2026 — QF".
     pub competition: Option<String>,
-    /// Side names; both optional (tennis doubles) or both absent (draw).
-    pub winner: Option<String>,
-    pub loser: Option<String>,
-    /// Score as (winner points, loser points) per period; empty = no score.
+    /// Side names; both optional (tennis doubles).
+    pub side1: Option<String>,
+    pub side2: Option<String>,
+    /// Score as (side 1 points, side 2 points) per period; empty = no score.
     /// Points are signed (card games, golf can go negative).
     pub periods: Vec<(i32, i32)>,
     pub referees: Vec<String>,
-    pub winner_players: Vec<String>,
-    pub loser_players: Vec<String>,
+    pub side1_players: Vec<String>,
+    pub side2_players: Vec<String>,
     pub participants: Vec<Participant>,
+    /// Which side(s) forfeited, if any.
+    pub forfeit: Option<Forfeit>,
 }
 
 impl MatchResult {
@@ -89,14 +115,50 @@ impl MatchResult {
         }
     }
 
-    /// "25-10 25-14" (one "w-l" group per period).
+    /// Deduce the outcome of a versus game.
+    ///
+    /// A forfeit field takes precedence. Otherwise the score decides: the
+    /// side winning more periods wins; on a tie, the side with the higher
+    /// point total wins; if both are tied the game is a draw. Sports decided
+    /// by total points must therefore be encoded as a single period.
+    pub fn outcome(&self) -> Outcome {
+        match self.forfeit {
+            Some(Forfeit::Side1) => return Outcome::Side2WinsByForfeit,
+            Some(Forfeit::Side2) => return Outcome::Side1WinsByForfeit,
+            Some(Forfeit::Both) => return Outcome::BothForfeited,
+            None => {}
+        }
+        if self.periods.is_empty() {
+            return Outcome::Unknown;
+        }
+        let periods1 = self.periods.iter().filter(|(a, b)| a > b).count();
+        let periods2 = self.periods.iter().filter(|(a, b)| b > a).count();
+        if periods1 != periods2 {
+            return if periods1 > periods2 {
+                Outcome::Side1Wins
+            } else {
+                Outcome::Side2Wins
+            };
+        }
+        let total1: i64 = self.periods.iter().map(|(a, _)| *a as i64).sum();
+        let total2: i64 = self.periods.iter().map(|(_, b)| *b as i64).sum();
+        if total1 > total2 {
+            Outcome::Side1Wins
+        } else if total2 > total1 {
+            Outcome::Side2Wins
+        } else {
+            Outcome::Draw
+        }
+    }
+
+    /// "25-10 25-14" (one "side1-side2" group per period).
     pub fn score_string(&self) -> String {
         let mut s = String::new();
-        for (i, (w, l)) in self.periods.iter().enumerate() {
+        for (i, (a, b)) in self.periods.iter().enumerate() {
             if i > 0 {
                 s.push(' ');
             }
-            s.push_str(&alloc::format!("{}-{}", w, l));
+            s.push_str(&alloc::format!("{}-{}", a, b));
         }
         s
     }
@@ -170,12 +232,22 @@ fn parse_score(data: &[u8]) -> Result<Vec<(i32, i32)>, AppSW> {
             if value.len() != 8 || periods.len() >= MAX_PERIODS {
                 return Err(AppSW::ParsingFail);
             }
-            let w = i32::from_be_bytes(value[0..4].try_into().unwrap());
-            let l = i32::from_be_bytes(value[4..8].try_into().unwrap());
-            periods.push((w, l));
+            let a = i32::from_be_bytes(value[0..4].try_into().unwrap());
+            let b = i32::from_be_bytes(value[4..8].try_into().unwrap());
+            periods.push((a, b));
         }
     }
     Ok(periods)
+}
+
+/// Forfeit field: 1 byte, which side(s) forfeited.
+fn parse_forfeit(data: &[u8]) -> Result<Forfeit, AppSW> {
+    match data {
+        [0x01] => Ok(Forfeit::Side1),
+        [0x02] => Ok(Forfeit::Side2),
+        [0x03] => Ok(Forfeit::Both),
+        _ => Err(AppSW::ParsingFail),
+    }
 }
 
 /// Participants block: repeated fields, tag 0x01 = one participant, itself a
@@ -235,13 +307,14 @@ pub fn parse(data: &[u8]) -> Result<MatchResult, AppSW> {
             TAG_ACTIVITY => result.activity = Some(parse_name(value)?),
             TAG_LOCATION => result.location = Some(parse_name(value)?),
             TAG_COMPETITION => result.competition = Some(parse_name(value)?),
-            TAG_WINNER => result.winner = Some(parse_name(value)?),
-            TAG_LOSER => result.loser = Some(parse_name(value)?),
+            TAG_SIDE1 => result.side1 = Some(parse_name(value)?),
+            TAG_SIDE2 => result.side2 = Some(parse_name(value)?),
             TAG_SCORE => result.periods = parse_score(value)?,
             TAG_REFEREES => result.referees = parse_name_list(value)?,
-            TAG_WINNER_PLAYERS => result.winner_players = parse_name_list(value)?,
-            TAG_LOSER_PLAYERS => result.loser_players = parse_name_list(value)?,
+            TAG_SIDE1_PLAYERS => result.side1_players = parse_name_list(value)?,
+            TAG_SIDE2_PLAYERS => result.side2_players = parse_name_list(value)?,
             TAG_PARTICIPANTS => result.participants = parse_participants(value)?,
+            TAG_FORFEIT => result.forfeit = Some(parse_forfeit(value)?),
             _ => {} // forward compatibility
         }
     }
@@ -253,21 +326,22 @@ pub fn parse(data: &[u8]) -> Result<MatchResult, AppSW> {
     match result.layout() {
         Layout::FreeForAll => {
             // Versus-only fields must not be mixed in.
-            if result.winner.is_some()
-                || result.loser.is_some()
+            if result.side1.is_some()
+                || result.side2.is_some()
                 || !result.periods.is_empty()
-                || !result.winner_players.is_empty()
-                || !result.loser_players.is_empty()
+                || !result.side1_players.is_empty()
+                || !result.side2_players.is_empty()
+                || result.forfeit.is_some()
             {
                 return Err(AppSW::ParsingFail);
             }
         }
         Layout::Versus => {
             // At least one side designation (name or players) must exist.
-            if result.winner.is_none()
-                && result.loser.is_none()
-                && result.winner_players.is_empty()
-                && result.loser_players.is_empty()
+            if result.side1.is_none()
+                && result.side2.is_none()
+                && result.side1_players.is_empty()
+                && result.side2_players.is_empty()
             {
                 return Err(AppSW::ParsingFail);
             }

@@ -1,17 +1,20 @@
 # ledger-match
 
-A [Ledger](https://www.ledger.com/) device app, written in Rust with the
+A [Ledger](https://www.ledger.com/) device app ("Game Signer"), written in
+Rust with the
 [ledger-device-rust-sdk](https://github.com/LedgerHQ/ledger-device-rust-sdk),
-that **signs sport match results** after an on-device review (clear signing).
+that **signs game results** after an on-device review (clear signing).
 
 Primary target: **Ledger Flex**. Also builds for Stax, Nano X and Nano S+.
 
 The signed payload is deliberately activity-agnostic. Two layouts share one
-TLV format (version 2):
+TLV format (version 1):
 
-- **Versus**: `(activity?, date, location?, competition?, winner?, loser?,
-  score?, referees?, winningPlayers?, losingPlayers?)` — names, score and all
-  lists optional (tennis doubles have no team name, chess needs no score).
+- **Versus**: `(activity?, date, location?, competition?, side1?, side2?,
+  score?, referees?, side1Players?, side2Players?, forfeit?)` — names, score
+  and all lists optional (tennis doubles have no team name, chess needs no
+  score). The winner (or a draw) is deduced from the score; forfeits are
+  carried explicitly.
 - **Free-for-all**: `(activity?, date, location?, participants[{name, score?}],
   referees?)` — tarot, bridge, races.
 
@@ -21,10 +24,11 @@ etc. See [docs/APDU.md](docs/APDU.md) for the exact binary format.
 
 ## Flow
 
-1. The companion app (expo-web / Android, future work) sends the match result
+1. The companion app (expo-web / Android, future work) sends the game result
    to the device over the APDU protocol described in
    [docs/APDU.md](docs/APDU.md).
-2. The device shows the date, both teams and the score for review.
+2. The device shows the date, both sides, the score and the deduced outcome
+   for review.
 3. On approval, the device signs the Keccak-256 hash of the canonical payload
    with the key at the requested BIP32 path (secp256k1) and returns the
    signature.
@@ -42,7 +46,7 @@ ledger-match/
 ├── src/
 │   ├── main.rs           # entry point, APDU instruction parsing, main loop
 │   ├── handlers.rs       # GET_VERSION / GET_PUBLIC_KEY / SIGN_MATCH handlers
-│   ├── match_result.rs   # TLV model + parser (the sport-agnostic format)
+│   ├── match_result.rs   # TLV model + parser (the activity-agnostic format)
 │   ├── ui.rs             # NBGL home / review / address screens
 │   └── utils.rs          # BIP32 path, key derivation, timestamp formatting
 ├── scripts/make_icons.py # regenerates icons/ (stdlib only)

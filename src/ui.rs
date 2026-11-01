@@ -4,7 +4,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::match_result::{Layout, MatchResult};
+use crate::match_result::{Layout, MatchResult, Outcome};
 use crate::AppSW;
 use ledger_device_sdk::include_gif;
 use ledger_device_sdk::io::Comm;
@@ -37,8 +37,9 @@ const MAX_LIST_DISPLAY: usize = 96;
 pub fn ui_menu_main(_: &mut Comm) -> NbglHomeAndSettings {
     NbglHomeAndSettings::new()
         .glyph(&HOME_GLYPH)
+        .tagline("Review and sign game results.")
         .infos(
-            "Match Signer",
+            "Game Signer",
             env!("CARGO_PKG_VERSION"),
             env!("CARGO_PKG_AUTHORS"),
         )
@@ -84,14 +85,39 @@ pub fn ui_display_match(comm: &mut Comm, m: &MatchResult) -> Result<bool, AppSW>
     let activity = m.activity.clone().unwrap_or_default();
     let location = m.location.clone().unwrap_or_default();
     let competition = m.competition.clone().unwrap_or_default();
-    let winner = m.winner.clone().unwrap_or_default();
-    let loser = m.loser.clone().unwrap_or_default();
+    let side1 = m.side1.clone().unwrap_or_default();
+    let side2 = m.side2.clone().unwrap_or_default();
     let score = m.score_string();
     let referees = join_truncated(&m.referees, MAX_LIST_DISPLAY);
-    let winner_players = join_truncated(&m.winner_players, MAX_LIST_DISPLAY);
-    let loser_players = join_truncated(&m.loser_players, MAX_LIST_DISPLAY);
+    let side1_players = join_truncated(&m.side1_players, MAX_LIST_DISPLAY);
+    let side2_players = join_truncated(&m.side2_players, MAX_LIST_DISPLAY);
 
     let is_ffa = m.layout() == Layout::FreeForAll;
+
+    // Display name of a side in the result line: side name, else its player
+    // list, else a generic label.
+    let side_display = |name: &str, players: &str, fallback: &str| -> String {
+        if !name.is_empty() {
+            String::from(name)
+        } else if !players.is_empty() {
+            String::from(players)
+        } else {
+            String::from(fallback)
+        }
+    };
+    let side1_display = side_display(&side1, &side1_players, "Side 1");
+    let side2_display = side_display(&side2, &side2_players, "Side 2");
+
+    // Outcome line, deduced from the forfeit field and the score.
+    let result_line = match m.outcome() {
+        Outcome::Side1Wins => format!("{} beats {}", side1_display, side2_display),
+        Outcome::Side2Wins => format!("{} beats {}", side2_display, side1_display),
+        Outcome::Draw => format!("Draw between {} and {}", side1_display, side2_display),
+        Outcome::Side1WinsByForfeit => format!("{} won by forfeit", side1_display),
+        Outcome::Side2WinsByForfeit => format!("{} won by forfeit", side2_display),
+        Outcome::BothForfeited => String::from("Both sides forfeited"),
+        Outcome::Unknown => String::new(),
+    };
 
     // Individual scores for free-for-all (kept alive until after the review).
     let mut participant_scores: Vec<String> = Vec::new();
@@ -122,12 +148,13 @@ pub fn ui_display_match(comm: &mut Comm, m: &MatchResult) -> Result<bool, AppSW>
         }
         push_opt(&mut fields, "Referees", referees.as_str());
     } else {
-        push_opt(&mut fields, "Winner", winner.as_str());
-        push_opt(&mut fields, "Loser", loser.as_str());
+        push_opt(&mut fields, "Side 1", side1.as_str());
+        push_opt(&mut fields, "Side 2", side2.as_str());
         push_opt(&mut fields, "Score", score.as_str());
+        push_opt(&mut fields, "Result", result_line.as_str());
         push_opt(&mut fields, "Referees", referees.as_str());
-        push_opt(&mut fields, "Winning players", winner_players.as_str());
-        push_opt(&mut fields, "Losing players", loser_players.as_str());
+        push_opt(&mut fields, "Side 1 players", side1_players.as_str());
+        push_opt(&mut fields, "Side 2 players", side2_players.as_str());
     }
 
     let review: NbglReview = NbglReview::new()
@@ -135,10 +162,10 @@ pub fn ui_display_match(comm: &mut Comm, m: &MatchResult) -> Result<bool, AppSW>
             if is_ffa {
                 "Review result"
             } else {
-                "Review match result"
+                "Review game result"
             },
             "",
-            if is_ffa { "Sign result" } else { "Sign match result" },
+            if is_ffa { "Sign result" } else { "Sign game result" },
         )
         .glyph(&MATCH_GLYPH);
 

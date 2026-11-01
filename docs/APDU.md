@@ -1,9 +1,9 @@
 # ledger-match APDU protocol
 
-This document is the stable contract between the `ledger-match` device app and
-its companion clients (expo-web, Android, ...). It is transport-agnostic: any
-Ledger transport (USB HID, WebUSB, BLE, Device Management Kit) can carry these
-APDUs.
+This document is the stable contract between the `ledger-match` device app
+("Game Signer") and its companion clients (expo-web, Android, ...). It is
+transport-agnostic: any Ledger transport (USB HID, WebUSB, BLE, Device
+Management Kit) can carry these APDUs.
 
 - CLA: `0xE0` for all commands
 - Status words: see [Status words](#status-words)
@@ -63,7 +63,7 @@ Chunked command:
    chunks follow, `0x00` on the last chunk; data = next slice of the TLV
    payload (max 255 bytes per chunk).
 
-After the last chunk the device parses the payload, shows the match for
+After the last chunk the device parses the payload, shows the game result for
 review, and on approval returns:
 
 ```
@@ -78,7 +78,7 @@ modal "signed/rejected" status page for ~3 seconds. APDUs sent during that
 window may be answered with `0x6901` (command not accepted) — clients should
 wait for the home screen (or ~3 s) before issuing the next command.
 
-## Result TLV format (v2)
+## Result TLV format (v1)
 
 Every field is `tag (1 byte) | length (u16 BE) | value`. Unknown tags must be
 skipped by parsers (forward compatibility). Nested blocks (score, referees,
@@ -95,7 +95,7 @@ a participants block; versus-only fields must then be absent.
 
 | Tag  | Name        | Value                               | Required |
 |------|-------------|-------------------------------------|----------|
-| 0x01 | version     | 1 byte, `0x02`                      | yes      |
+| 0x01 | version     | 1 byte, `0x01`                      | yes      |
 | 0x02 | activity    | UTF-8, e.g. `"volleyball"`, `"tarot"` | no     |
 | 0x03 | timestamp   | u64 BE, Unix seconds                | yes      |
 | 0x04 | location    | UTF-8                               | no       |
@@ -103,21 +103,39 @@ a participants block; versus-only fields must then be absent.
 
 ### Versus layout
 
-| Tag  | Name            | Value             | Required |
-|------|-----------------|-------------------|----------|
-| 0x06 | winner          | UTF-8 side name   | no*      |
-| 0x07 | loser           | UTF-8 side name   | no*      |
-| 0x08 | score           | score block       | no       |
-| 0x09 | referees        | name-list block   | no       |
-| 0x0A | winning players | name-list block   | no       |
-| 0x0B | losing players  | name-list block   | no       |
+| Tag  | Name           | Value             | Required |
+|------|----------------|-------------------|----------|
+| 0x06 | side 1 name    | UTF-8             | no*      |
+| 0x07 | side 2 name    | UTF-8             | no*      |
+| 0x08 | score          | score block       | no       |
+| 0x09 | referees       | name-list block   | no       |
+| 0x0A | side 1 players | name-list block   | no       |
+| 0x0B | side 2 players | name-list block   | no       |
+| 0x0D | forfeit        | 1 byte, see below | no       |
 
 *At least one side designation (a name or a player list) is required.
 
-Score block: repeated `0x01` fields, each 8 bytes = winner points (i32 BE) +
-loser points (i32 BE). One period for single-score sports, several for
+Score block: repeated `0x01` fields, each 8 bytes = side 1 points (i32 BE) +
+side 2 points (i32 BE). One period for single-score sports, several for
 set/quarter-based sports. Points are **signed** (golf, card games). Decimal
 scores are scaled by the client (e.g. ×100) — the format carries integers.
+
+Forfeit field: `0x01` = side 1 forfeited, `0x02` = side 2 forfeited,
+`0x03` = both sides forfeited. Any other value is rejected.
+
+**Outcome deduction.** The device derives the displayed outcome instead of
+trusting an explicit winner field:
+
+1. If a forfeit field is present it wins: "X won by forfeit" (the
+   non-forfeiting side) or "Both sides forfeited".
+2. Otherwise, with a score: the side winning more periods wins; on a tie, the
+   side with the higher point total wins; if both are tied the game is a draw.
+3. Without a score and without forfeit, no outcome is shown.
+
+Because ties on periods fall back to point totals, sports decided by **total
+points across periods** (basketball quarters, two-leg aggregates...) must be
+encoded as a **single period** carrying the final totals; per-period encoding
+is reserved for sports decided by periods won (volleyball/tennis sets).
 
 Name-list block: repeated `0x01` fields, each a UTF-8 name.
 
@@ -154,29 +172,33 @@ fully covered by the signature.
 
 ### Example (versus)
 
-Soccer: winner "ABC", loser "XYZ", score 2-1, timestamp 1780000000:
+Soccer: side 1 "ABC", side 2 "XYZ", score 2-1, timestamp 1780000000 (the
+device deduces "ABC beats XYZ"):
 
 ```
-01 0001 02                                      version = 2
+01 0001 01                                      version = 1
 02 0006 736F63636572                            activity "soccer"
 03 0008 000000006A18A900                        timestamp
-06 0003 414243                                  winner "ABC"
-07 0003 58595A                                  loser "XYZ"
+06 0003 414243                                  side 1 "ABC"
+07 0003 58595A                                  side 2 "XYZ"
 08 000B 0100080000000200000001                  score: one period 2-1
 ```
 
 Full payload (54 bytes):
 
 ```
-01000102020006736f63636572030008000000006a18a90006000341424307000358595a08000b0100080000000200000001
+01000101020006736f63636572030008000000006a18a90006000341424307000358595a08000b0100080000000200000001
 ```
+
+A forfeit of side 2 would add `0D 0001 02` ("ABC won by forfeit"); a 2-2 score
+would display "Draw between ABC and XYZ".
 
 ### Example (free-for-all)
 
 Tarot, 4 participants, timestamp 1780000000 (95 bytes):
 
 ```
-01 0001 02                                      version = 2
+01 0001 01                                      version = 1
 02 0005 7461726F74                              activity "tarot"
 03 0008 000000006A18A900                        timestamp
 0C 0045                                         participants block (69 bytes):
@@ -197,8 +219,8 @@ Tarot, 4 participants, timestamp 1780000000 (95 bytes):
 | 0x6D00 | INS not supported                    |
 | 0x6E00 | CLA not supported                    |
 | 0x6F00 | Communication error                  |
-| 0xB004 | Match payload too long               |
-| 0xB005 | Match payload parsing failed         |
+| 0xB004 | Result payload too long              |
+| 0xB005 | Result payload parsing failed        |
 | 0xB006 | Hashing failed                       |
 | 0xB008 | Signing failed                       |
 | 0xB009 | Key derivation failed                |
@@ -218,7 +240,7 @@ Recommended stacks:
   (`@ledgerhq/device-signer-kit-*`) or, at a lower level,
   `@ledgerhq/hw-transport-webusb` in the browser and
   `@ledgerhq/react-native-hw-transport-ble` in Expo. Wrap the TLV encoder +
-  APDU exchange in a small `MatchSigner` class so the transport can be swapped.
+  APDU exchange in a small `GameSigner` class so the transport can be swapped.
 - **android (Kotlin)** — a thin transport layer over USB/BLE sending the same
   byte sequences; mirror the TLV encoder in Kotlin.
 

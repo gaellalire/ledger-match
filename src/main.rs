@@ -1,7 +1,7 @@
-//! ledger-match: a Ledger app that signs sport match results.
+//! ledger-match: a Ledger app that signs game results ("Game Signer").
 //!
-//! The device receives a sport-agnostic, TLV-encoded match result
-//! (date, winner team, loser team, score), displays it for clear signing,
+//! The device receives an activity-agnostic, TLV-encoded game result
+//! (date, sides, score, optional forfeit), displays it for clear signing,
 //! and returns a secp256k1 signature of its Keccak-256 hash.
 //!
 //! See docs/APDU.md for the full protocol specification.
