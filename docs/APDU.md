@@ -125,7 +125,7 @@ Result flag (forfeit and winner share this field): `0x01` = side 1 forfeited,
 won, `0x05` = side 2 won, `0x06` = draw. Any other value is rejected. A
 winner/draw flag (`0x04`-`0x06`) is verified against the score: with a
 decisive score it must name the same outcome, otherwise the payload is
-rejected. With a tied score (same periods won and a tied last period) any of the three is
+rejected. With a tied score (same number of periods won) any of the three is
 accepted, which tells a draw apart from a tie-break win (extra time, penalty
 shoot-out...). Without a score it is accepted as is.
 
@@ -136,12 +136,12 @@ inconsistent flags:
    non-forfeiting side) or "Both sides forfeited".
 2. Otherwise, if a winner/draw flag is present it is displayed (it has been
    checked against the score, see above).
-3. Otherwise, with a score: the side winning more periods wins; on a tie, only
-   the last period counts (earlier points are ignored); if it is tied too the
-   game is a draw. E.g. `25-10 15-25 11-11` is a tied score.
+3. Otherwise, with a score: the side winning more periods wins; equal periods
+   won is a draw, whatever the points. E.g. `25-10 15-25 11-11` and
+   `25-2 3-25 25-1 2-25` are tied scores.
 4. Without a score and without flag, no outcome is shown.
 
-Because ties on periods fall back to the last period, sports decided by **total
+Because the points of a period only matter to decide who won it, sports decided by **total
 points across periods** (basketball quarters, two-leg aggregates...) must be
 encoded as a **single period** carrying the final totals; per-period encoding
 is reserved for sports decided by periods won (volleyball/tennis sets).

@@ -125,10 +125,9 @@ impl MatchResult {
 
     /// Outcome deduced from the score alone, if there is one.
     ///
-    /// The side winning more periods wins; on a tie, only the last period
-    /// counts (earlier points are ignored); if it is tied too the game is a
-    /// draw. Sports decided by total points must therefore be encoded as a
-    /// single period.
+    /// The side winning more periods wins; equal periods won (including no
+    /// period won at all) is a tie, whatever the points. Sports decided by
+    /// total points must therefore be encoded as a single period.
     fn score_outcome(&self) -> Option<Outcome> {
         if self.periods.is_empty() {
             return None;
@@ -142,14 +141,7 @@ impl MatchResult {
                 Outcome::Side2Wins
             });
         }
-        let (last1, last2) = self.periods[self.periods.len() - 1];
-        Some(if last1 > last2 {
-            Outcome::Side1Wins
-        } else if last2 > last1 {
-            Outcome::Side2Wins
-        } else {
-            Outcome::Draw
-        })
+        Some(Outcome::Draw)
     }
 
     /// Deduce the outcome of a versus game.
