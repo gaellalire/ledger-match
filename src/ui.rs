@@ -108,7 +108,7 @@ pub fn ui_display_match(comm: &mut Comm, m: &MatchResult) -> Result<bool, AppSW>
     let side1_display = side_display(&side1, &side1_players, "Side 1");
     let side2_display = side_display(&side2, &side2_players, "Side 2");
 
-    // Outcome line, deduced from the forfeit field and the score.
+    // Outcome line, deduced from the result flag and the score.
     let result_line = match m.outcome() {
         Outcome::Side1Wins => format!("{} beats {}", side1_display, side2_display),
         Outcome::Side2Wins => format!("{} beats {}", side2_display, side1_display),

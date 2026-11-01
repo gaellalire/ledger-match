@@ -13,8 +13,8 @@ TLV format (version 1):
 - **Versus**: `(activity?, date, location?, competition?, side1?, side2?,
   score?, referees?, side1Players?, side2Players?, forfeit?)` — names, score
   and all lists optional (tennis doubles have no team name, chess needs no
-  score). The winner (or a draw) is deduced from the score; forfeits are
-  carried explicitly.
+  score). The winner (or a draw) is deduced from the score; forfeits and an explicit winner/draw flag (checked
+  against the score, it settles tied scores) are carried explicitly.
 - **Free-for-all**: `(activity?, date, location?, participants[{name, score?}],
   referees?)` — tarot, bridge, races.
 

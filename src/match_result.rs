@@ -3,8 +3,9 @@
 //! Two layouts share one format:
 //! - **Versus**: two sides (side 1/side 2), each side being an optional name
 //!   plus an optional player list; a shared score (per period) is optional.
-//!   The outcome (win/draw) is deduced from the score; forfeits are carried
-//!   by an explicit field.
+//!   The outcome (win/draw) is deduced from the score; an explicit result
+//!   field carries forfeits and the declared winner (or draw), which must be
+//!   compatible with the score and settles tied scores.
 //! - **Free-for-all**: a flat list of participants, each with an optional
 //!   individual score (tarot, bridge, races...).
 //!
@@ -26,6 +27,8 @@ use crate::AppSW;
 pub const MAX_MATCH_LEN: usize = 3072;
 /// Maximum byte length of a name or free-text field (UTF-8).
 pub const MAX_NAME_LEN: usize = 32;
+/// Maximum byte length of the location and competition fields (UTF-8).
+pub const MAX_LONG_TEXT_LEN: usize = 64;
 /// Maximum items in any list (players per side, participants, referees).
 pub const MAX_LIST_ITEMS: usize = 24;
 /// Maximum number of score periods (sets, quarters, innings, ...).
@@ -44,7 +47,7 @@ const TAG_REFEREES: u8 = 0x09;
 const TAG_SIDE1_PLAYERS: u8 = 0x0A;
 const TAG_SIDE2_PLAYERS: u8 = 0x0B;
 const TAG_PARTICIPANTS: u8 = 0x0C;
-const TAG_FORFEIT: u8 = 0x0D;
+const TAG_RESULT: u8 = 0x0D;
 
 const FORMAT_VERSION: u8 = 0x01;
 
@@ -61,12 +64,15 @@ pub enum Layout {
     FreeForAll,
 }
 
-/// Which side(s) forfeited (explicit field, tag 0x0D).
+/// Explicit result flag (tag 0x0D): forfeits or declared winner/draw.
 #[derive(Clone, Copy, PartialEq)]
-pub enum Forfeit {
-    Side1 = 0x01,
-    Side2 = 0x02,
-    Both = 0x03,
+pub enum ResultFlag {
+    Side1Forfeited = 0x01,
+    Side2Forfeited = 0x02,
+    BothForfeited = 0x03,
+    Side1Won = 0x04,
+    Side2Won = 0x05,
+    Draw = 0x06,
 }
 
 /// Outcome of a versus game, deduced from the forfeit field and the score.
@@ -102,8 +108,8 @@ pub struct MatchResult {
     pub side1_players: Vec<String>,
     pub side2_players: Vec<String>,
     pub participants: Vec<Participant>,
-    /// Which side(s) forfeited, if any.
-    pub forfeit: Option<Forfeit>,
+    /// Explicit forfeit / winner flag, if any.
+    pub flag: Option<ResultFlag>,
 }
 
 impl MatchResult {
@@ -115,40 +121,66 @@ impl MatchResult {
         }
     }
 
-    /// Deduce the outcome of a versus game.
+    /// Outcome deduced from the score alone, if there is one.
     ///
-    /// A forfeit field takes precedence. Otherwise the score decides: the
-    /// side winning more periods wins; on a tie, the side with the higher
-    /// point total wins; if both are tied the game is a draw. Sports decided
-    /// by total points must therefore be encoded as a single period.
-    pub fn outcome(&self) -> Outcome {
-        match self.forfeit {
-            Some(Forfeit::Side1) => return Outcome::Side2WinsByForfeit,
-            Some(Forfeit::Side2) => return Outcome::Side1WinsByForfeit,
-            Some(Forfeit::Both) => return Outcome::BothForfeited,
-            None => {}
-        }
+    /// The side winning more periods wins; on a tie, only the last period
+    /// counts (earlier points are ignored); if it is tied too the game is a
+    /// draw. Sports decided by total points must therefore be encoded as a
+    /// single period.
+    fn score_outcome(&self) -> Option<Outcome> {
         if self.periods.is_empty() {
-            return Outcome::Unknown;
+            return None;
         }
         let periods1 = self.periods.iter().filter(|(a, b)| a > b).count();
         let periods2 = self.periods.iter().filter(|(a, b)| b > a).count();
         if periods1 != periods2 {
-            return if periods1 > periods2 {
+            return Some(if periods1 > periods2 {
                 Outcome::Side1Wins
             } else {
                 Outcome::Side2Wins
-            };
+            });
         }
-        let total1: i64 = self.periods.iter().map(|(a, _)| *a as i64).sum();
-        let total2: i64 = self.periods.iter().map(|(_, b)| *b as i64).sum();
-        if total1 > total2 {
+        let (last1, last2) = self.periods[self.periods.len() - 1];
+        Some(if last1 > last2 {
             Outcome::Side1Wins
-        } else if total2 > total1 {
+        } else if last2 > last1 {
             Outcome::Side2Wins
         } else {
             Outcome::Draw
+        })
+    }
+
+    /// Deduce the outcome of a versus game.
+    ///
+    /// Forfeit flags take precedence. A winner/draw flag is compatible with
+    /// the score (checked by `parse`) and settles a tied score; otherwise the
+    /// score decides.
+    pub fn outcome(&self) -> Outcome {
+        match self.flag {
+            Some(ResultFlag::Side1Forfeited) => Outcome::Side2WinsByForfeit,
+            Some(ResultFlag::Side2Forfeited) => Outcome::Side1WinsByForfeit,
+            Some(ResultFlag::BothForfeited) => Outcome::BothForfeited,
+            Some(ResultFlag::Side1Won) => Outcome::Side1Wins,
+            Some(ResultFlag::Side2Won) => Outcome::Side2Wins,
+            Some(ResultFlag::Draw) => Outcome::Draw,
+            None => self.score_outcome().unwrap_or(Outcome::Unknown),
         }
+    }
+
+    /// A winner/draw flag must agree with a decisive score; a tied score
+    /// accepts any of them (tie-break, shoot-out, or plain draw).
+    fn flag_matches_score(&self) -> bool {
+        let expected = match self.score_outcome() {
+            Some(o) => o,
+            None => return true,
+        };
+        let declared = match self.flag {
+            Some(ResultFlag::Side1Won) => Outcome::Side1Wins,
+            Some(ResultFlag::Side2Won) => Outcome::Side2Wins,
+            Some(ResultFlag::Draw) => Outcome::Draw,
+            _ => return true,
+        };
+        expected == Outcome::Draw || expected == declared
     }
 
     /// "25-10 25-14" (one "side1-side2" group per period).
@@ -201,7 +233,11 @@ impl<'a> TlvReader<'a> {
 }
 
 fn parse_name(data: &[u8]) -> Result<String, AppSW> {
-    if data.is_empty() || data.len() > MAX_NAME_LEN {
+    parse_text(data, MAX_NAME_LEN)
+}
+
+fn parse_text(data: &[u8], max_len: usize) -> Result<String, AppSW> {
+    if data.is_empty() || data.len() > max_len {
         return Err(AppSW::ParsingFail);
     }
     let s = str::from_utf8(data).map_err(|_| AppSW::ParsingFail)?;
@@ -240,12 +276,15 @@ fn parse_score(data: &[u8]) -> Result<Vec<(i32, i32)>, AppSW> {
     Ok(periods)
 }
 
-/// Forfeit field: 1 byte, which side(s) forfeited.
-fn parse_forfeit(data: &[u8]) -> Result<Forfeit, AppSW> {
+/// Result field: 1 byte, forfeit (1-3) or declared winner/draw (4-6).
+fn parse_result_flag(data: &[u8]) -> Result<ResultFlag, AppSW> {
     match data {
-        [0x01] => Ok(Forfeit::Side1),
-        [0x02] => Ok(Forfeit::Side2),
-        [0x03] => Ok(Forfeit::Both),
+        [0x01] => Ok(ResultFlag::Side1Forfeited),
+        [0x02] => Ok(ResultFlag::Side2Forfeited),
+        [0x03] => Ok(ResultFlag::BothForfeited),
+        [0x04] => Ok(ResultFlag::Side1Won),
+        [0x05] => Ok(ResultFlag::Side2Won),
+        [0x06] => Ok(ResultFlag::Draw),
         _ => Err(AppSW::ParsingFail),
     }
 }
@@ -305,8 +344,8 @@ pub fn parse(data: &[u8]) -> Result<MatchResult, AppSW> {
                 have_timestamp = true;
             }
             TAG_ACTIVITY => result.activity = Some(parse_name(value)?),
-            TAG_LOCATION => result.location = Some(parse_name(value)?),
-            TAG_COMPETITION => result.competition = Some(parse_name(value)?),
+            TAG_LOCATION => result.location = Some(parse_text(value, MAX_LONG_TEXT_LEN)?),
+            TAG_COMPETITION => result.competition = Some(parse_text(value, MAX_LONG_TEXT_LEN)?),
             TAG_SIDE1 => result.side1 = Some(parse_name(value)?),
             TAG_SIDE2 => result.side2 = Some(parse_name(value)?),
             TAG_SCORE => result.periods = parse_score(value)?,
@@ -314,7 +353,7 @@ pub fn parse(data: &[u8]) -> Result<MatchResult, AppSW> {
             TAG_SIDE1_PLAYERS => result.side1_players = parse_name_list(value)?,
             TAG_SIDE2_PLAYERS => result.side2_players = parse_name_list(value)?,
             TAG_PARTICIPANTS => result.participants = parse_participants(value)?,
-            TAG_FORFEIT => result.forfeit = Some(parse_forfeit(value)?),
+            TAG_RESULT => result.flag = Some(parse_result_flag(value)?),
             _ => {} // forward compatibility
         }
     }
@@ -331,7 +370,7 @@ pub fn parse(data: &[u8]) -> Result<MatchResult, AppSW> {
                 || !result.periods.is_empty()
                 || !result.side1_players.is_empty()
                 || !result.side2_players.is_empty()
-                || result.forfeit.is_some()
+                || result.flag.is_some()
             {
                 return Err(AppSW::ParsingFail);
             }
@@ -343,6 +382,9 @@ pub fn parse(data: &[u8]) -> Result<MatchResult, AppSW> {
                 && result.side1_players.is_empty()
                 && result.side2_players.is_empty()
             {
+                return Err(AppSW::ParsingFail);
+            }
+            if !result.flag_matches_score() {
                 return Err(AppSW::ParsingFail);
             }
         }

@@ -96,10 +96,10 @@ a participants block; versus-only fields must then be absent.
 | Tag  | Name        | Value                               | Required |
 |------|-------------|-------------------------------------|----------|
 | 0x01 | version     | 1 byte, `0x01`                      | yes      |
-| 0x02 | activity    | UTF-8, e.g. `"volleyball"`, `"tarot"` | no     |
+| 0x02 | activity    | UTF-8, capitalized, e.g. `"Volleyball"`, `"Tarot"` | no |
 | 0x03 | timestamp   | u64 BE, Unix seconds                | yes      |
-| 0x04 | location    | UTF-8                               | no       |
-| 0x05 | competition | UTF-8, e.g. `"Roland Garros 2026 QF"` | no    |
+| 0x04 | location    | UTF-8 (max 64 B)                    | no       |
+| 0x05 | competition | UTF-8 (max 64 B), e.g. `"Roland Garros 2026 QF"` | no |
 
 ### Versus layout
 
@@ -111,7 +111,7 @@ a participants block; versus-only fields must then be absent.
 | 0x09 | referees       | name-list block   | no       |
 | 0x0A | side 1 players | name-list block   | no       |
 | 0x0B | side 2 players | name-list block   | no       |
-| 0x0D | forfeit        | 1 byte, see below | no       |
+| 0x0D | result flag    | 1 byte, see below | no       |
 
 *At least one side designation (a name or a player list) is required.
 
@@ -120,19 +120,28 @@ side 2 points (i32 BE). One period for single-score sports, several for
 set/quarter-based sports. Points are **signed** (golf, card games). Decimal
 scores are scaled by the client (e.g. ×100) — the format carries integers.
 
-Forfeit field: `0x01` = side 1 forfeited, `0x02` = side 2 forfeited,
-`0x03` = both sides forfeited. Any other value is rejected.
+Result flag (forfeit and winner share this field): `0x01` = side 1 forfeited,
+`0x02` = side 2 forfeited, `0x03` = both sides forfeited, `0x04` = side 1
+won, `0x05` = side 2 won, `0x06` = draw. Any other value is rejected. A
+winner/draw flag (`0x04`-`0x06`) is verified against the score: with a
+decisive score it must name the same outcome, otherwise the payload is
+rejected. With a tied score (same periods won and a tied last period) any of the three is
+accepted, which tells a draw apart from a tie-break win (extra time, penalty
+shoot-out...). Without a score it is accepted as is.
 
-**Outcome deduction.** The device derives the displayed outcome instead of
-trusting an explicit winner field:
+**Outcome deduction.** The device derives the displayed outcome and rejects
+inconsistent flags:
 
-1. If a forfeit field is present it wins: "X won by forfeit" (the
+1. If a forfeit flag is present it wins: "X won by forfeit" (the
    non-forfeiting side) or "Both sides forfeited".
-2. Otherwise, with a score: the side winning more periods wins; on a tie, the
-   side with the higher point total wins; if both are tied the game is a draw.
-3. Without a score and without forfeit, no outcome is shown.
+2. Otherwise, if a winner/draw flag is present it is displayed (it has been
+   checked against the score, see above).
+3. Otherwise, with a score: the side winning more periods wins; on a tie, only
+   the last period counts (earlier points are ignored); if it is tied too the
+   game is a draw. E.g. `25-10 15-25 11-11` is a tied score.
+4. Without a score and without flag, no outcome is shown.
 
-Because ties on periods fall back to point totals, sports decided by **total
+Because ties on periods fall back to the last period, sports decided by **total
 points across periods** (basketball quarters, two-leg aggregates...) must be
 encoded as a **single period** carrying the final totals; per-period encoding
 is reserved for sports decided by periods won (volleyball/tennis sets).
@@ -162,7 +171,8 @@ activity).
 | Limit                                                    | Value  |
 |----------------------------------------------------------|--------|
 | Total payload                                            | 3072 B |
-| Name / text field                                        | 32 B   |
+| Name / text field (activity, sides, players, referees)   | 32 B   |
+| Location, competition                                    | 64 B   |
 | Items per list (players, participants, referees)         | 24     |
 | Score periods                                            | 16     |
 | Chunks (incl. path)                                      | 16     |
@@ -177,7 +187,7 @@ device deduces "ABC beats XYZ"):
 
 ```
 01 0001 01                                      version = 1
-02 0006 736F63636572                            activity "soccer"
+02 0006 536F63636572                            activity "Soccer"
 03 0008 000000006A18A900                        timestamp
 06 0003 414243                                  side 1 "ABC"
 07 0003 58595A                                  side 2 "XYZ"
@@ -187,11 +197,12 @@ device deduces "ABC beats XYZ"):
 Full payload (54 bytes):
 
 ```
-01000101020006736f63636572030008000000006a18a90006000341424307000358595a08000b0100080000000200000001
+01000101020006536f63636572030008000000006a18a90006000341424307000358595a08000b0100080000000200000001
 ```
 
 A forfeit of side 2 would add `0D 0001 02` ("ABC won by forfeit"); a 2-2 score
-would display "Draw between ABC and XYZ".
+would display "Draw between ABC and XYZ", unless the flag `0D 0001 04` says
+side 1 won (e.g. on penalties).
 
 ### Example (free-for-all)
 
@@ -199,7 +210,7 @@ Tarot, 4 participants, timestamp 1780000000 (95 bytes):
 
 ```
 01 0001 01                                      version = 1
-02 0005 7461726F74                              activity "tarot"
+02 0005 5461726F74                              activity "Tarot"
 03 0008 000000006A18A900                        timestamp
 0C 0045                                         participants block (69 bytes):
   01 000F 010005416C6963650200040000026C        Alice, 620

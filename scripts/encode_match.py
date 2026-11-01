@@ -16,11 +16,14 @@ Versus JSON shape:
   "referees": ["Pep"],                    // optional
   "side1_players": ["Alice", "Bob"],      // optional
   "side2_players": ["Grace", "Heidi"],    // optional
-  "forfeit": "side1"                      // optional: "side1", "side2", "both"
+  "forfeit": "side1",                     // optional: "side1", "side2", "both"
+  "winner": "side1"                       // optional: "side1", "side2", "draw"
 }
 
-The winner (or a draw) is deduced on-device from the score; only forfeits are
-explicit. See docs/APDU.md for the deduction rules.
+"forfeit" and "winner" share one field (tag 0x0D); "forfeit" takes precedence.
+The winner (or a draw) is otherwise deduced on-device from the score; an
+explicit "winner" must be compatible with the score and settles tied scores.
+See docs/APDU.md for the deduction rules.
 
 Free-for-all JSON shape (tarot, bridge, races...):
 {
@@ -34,7 +37,10 @@ Usage: python3 scripts/encode_match.py < match.json
 import json
 import sys
 
-FORFEIT_VALUES = {"side1": 0x01, "side2": 0x02, "both": 0x03}
+RESULT_FLAG_VALUES = {
+    "forfeit": {"side1": 0x01, "side2": 0x02, "both": 0x03},
+    "winner": {"side1": 0x04, "side2": 0x05, "draw": 0x06},
+}
 
 
 def field(tag: int, value: bytes) -> bytes:
@@ -100,7 +106,9 @@ def encode(m: dict) -> bytes:
         if m.get("side2_players"):
             payload += field(0x0B, names_block(m["side2_players"]))
         if m.get("forfeit"):
-            payload += field(0x0D, bytes([FORFEIT_VALUES[m["forfeit"]]]))
+            payload += field(0x0D, bytes([RESULT_FLAG_VALUES["forfeit"][m["forfeit"]]]))
+        elif m.get("winner"):
+            payload += field(0x0D, bytes([RESULT_FLAG_VALUES["winner"][m["winner"]]]))
     return payload
 
 
