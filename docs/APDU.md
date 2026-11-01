@@ -98,7 +98,7 @@ a participants block; versus-only fields must then be absent.
 | 0x01 | version     | 1 byte, `0x01`                      | yes      |
 | 0x02 | activity    | UTF-8, capitalized, e.g. `"Volleyball"`, `"Tarot"` | no |
 | 0x03 | timestamp   | u64 BE, Unix seconds                | yes      |
-| 0x04 | location    | UTF-8 (max 64 B)                    | no       |
+| 0x04 | location    | UTF-8 (max 96 B)                    | no       |
 | 0x05 | competition | UTF-8 (max 64 B), e.g. `"Roland Garros 2026 QF"` | no |
 
 ### Versus layout
@@ -172,7 +172,8 @@ activity).
 |----------------------------------------------------------|--------|
 | Total payload                                            | 3072 B |
 | Name / text field (activity, sides, players, referees)   | 32 B   |
-| Location, competition                                    | 64 B   |
+| Location                                                 | 96 B   |
+| Competition                                              | 64 B   |
 | Items per list (players, participants, referees)         | 24     |
 | Score periods                                            | 16     |
 | Chunks (incl. path)                                      | 16     |

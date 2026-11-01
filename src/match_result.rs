@@ -27,8 +27,10 @@ use crate::AppSW;
 pub const MAX_MATCH_LEN: usize = 3072;
 /// Maximum byte length of a name or free-text field (UTF-8).
 pub const MAX_NAME_LEN: usize = 32;
-/// Maximum byte length of the location and competition fields (UTF-8).
-pub const MAX_LONG_TEXT_LEN: usize = 64;
+/// Maximum byte length of the location field (UTF-8).
+pub const MAX_LOCATION_LEN: usize = 96;
+/// Maximum byte length of the competition field (UTF-8).
+pub const MAX_COMPETITION_LEN: usize = 64;
 /// Maximum items in any list (players per side, participants, referees).
 pub const MAX_LIST_ITEMS: usize = 24;
 /// Maximum number of score periods (sets, quarters, innings, ...).
@@ -344,8 +346,8 @@ pub fn parse(data: &[u8]) -> Result<MatchResult, AppSW> {
                 have_timestamp = true;
             }
             TAG_ACTIVITY => result.activity = Some(parse_name(value)?),
-            TAG_LOCATION => result.location = Some(parse_text(value, MAX_LONG_TEXT_LEN)?),
-            TAG_COMPETITION => result.competition = Some(parse_text(value, MAX_LONG_TEXT_LEN)?),
+            TAG_LOCATION => result.location = Some(parse_text(value, MAX_LOCATION_LEN)?),
+            TAG_COMPETITION => result.competition = Some(parse_text(value, MAX_COMPETITION_LEN)?),
             TAG_SIDE1 => result.side1 = Some(parse_name(value)?),
             TAG_SIDE2 => result.side2 = Some(parse_name(value)?),
             TAG_SCORE => result.periods = parse_score(value)?,
